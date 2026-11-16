@@ -4,14 +4,16 @@
 #   3) 仓库变量与当前地址不一致才更新
 #   4) 变量变了才重新部署
 #   5) 打开网站（-NoOpen 可关闭）
-# 用法：.\scripts\refresh-demo.ps1 [-NoOpen] [-SkipDeploy] [-Force]
+# 用法：.\scripts\refresh-demo.ps1 [-NoOpen] [-SkipDeploy] [-Force] [-Watch]
 param(
     [string]$Repo = "doctorxiang/mes-server-power",
     [int]$Port = 5080,
     [string]$Cloudflared = "$env:USERPROFILE\tools\cloudflared.exe",
     [switch]$NoOpen,
     [switch]$SkipDeploy,
-    [switch]$Force
+    [switch]$Force,
+    # 守护模式：执行完一次检查后常驻后台，每天 08:00 / 12:00 / 18:00 各再检查一遍
+    [switch]$Watch
 )
 
 $ErrorActionPreference = "Stop"
@@ -164,3 +166,48 @@ if ($SkipDeploy) {
 Write-Host "[5/5] 隧道 $publicUrl" -ForegroundColor Green
 Write-Host "      网站 $site" -ForegroundColor Green
 if (-not $NoOpen) { Start-Process $site }
+
+# ---------- 守护模式：每天 08:00 / 12:00 / 18:00 各自愈检查一遍 ----------
+if ($Watch) {
+    $checkTimes = @("08:00", "12:00", "18:00")
+    $watchLog = Join-Path $env:TEMP "mes-demo-watch.log"
+    $watchLock = Join-Path $env:TEMP "mes-demo-watch.lock"
+    function Write-WatchLog([string]$m) {
+        "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" | Add-Content -Path $watchLog -Encoding UTF8
+    }
+
+    # 防重复：已有存活的守护进程就直接退出
+    if (Test-Path $watchLock) {
+        try {
+            $oldPid = Get-Content $watchLock -Raw | ForEach-Object { $_.Trim() }
+            if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
+                Write-WatchLog "已有守护进程 pid=$oldPid 在运行，本实例退出"
+                exit 0
+            }
+        } catch { }
+    }
+    $PID | Set-Content $watchLock -Encoding ASCII
+    Write-WatchLog "守护进程启动 pid=$PID，每日检查时点：$($checkTimes -join ' ')"
+
+    while ($true) {
+        $now = Get-Date
+        $next = $null
+        foreach ($t in $checkTimes) {
+            $cand = [datetime]::Today + [timespan]::Parse($t)
+            if ($cand -gt $now) { $next = $cand; break }
+        }
+        if (-not $next) { $next = [datetime]::Today.AddDays(1) + [timespan]::Parse($checkTimes[0]) }
+        Write-WatchLog "下次检查 $next（等待 $([int]($next - $now).TotalMinutes) 分钟）"
+        Start-Sleep -Seconds ([int]($next - $now).TotalSeconds + 1)
+
+        Write-WatchLog "=== 定时检查开始 ==="
+        try {
+            # 子进程跑一遍完整自愈检查（复用活隧道；隧道断了自动重建并同步部署）
+            & $PSCommandPath -NoOpen *>&1 | ForEach-Object { Write-WatchLog "  $_" }
+            Write-WatchLog "=== 定时检查结束（exit=$LASTEXITCODE） ==="
+        } catch {
+            Write-WatchLog "定时检查异常：$_"
+        }
+        Start-Sleep -Seconds 10
+    }
+}

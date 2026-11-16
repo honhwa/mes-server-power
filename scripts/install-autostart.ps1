@@ -1,7 +1,8 @@
 ﻿# 安装 / 移除「开机自动启动演示环境」
 # 装：.\scripts\install-autostart.ps1
 # 卸：.\scripts\install-autostart.ps1 -Remove
-# 实现方式：在用户启动文件夹放一个 cmd，登录时静默执行 refresh-demo.ps1（不弹浏览器）
+# 实现：在用户启动文件夹放一个 cmd，登录时静默启动守护进程
+# （守护进程 = 先立即检查一遍，然后每天 08:00 / 12:00 / 18:00 各检查一遍）
 param([switch]$Remove)
 
 $startup = [Environment]::GetFolderPath('Startup')
@@ -19,10 +20,10 @@ if (-not (Test-Path $script)) { Write-Host "找不到 $script" -ForegroundColor 
 $lines = @(
     '@echo off',
     'title MES Demo Launcher',
-    "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" -NoOpen"
+    "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" -Watch -NoOpen"
 )
 [IO.File]::WriteAllText($entry, ($lines -join "`r`n") + "`r`n", (New-Object Text.UTF8Encoding($false)))
 
 Write-Host "已启用开机自启：$entry" -ForegroundColor Green
-Write-Host "登录后后台静默启动后端与隧道（不弹浏览器）" -ForegroundColor Cyan
+Write-Host "登录后静默启动守护进程：立即检查一遍，然后每天 08:00 / 12:00 / 18:00 各检查一遍" -ForegroundColor Cyan
 Write-Host "取消：.\scripts\install-autostart.ps1 -Remove" -ForegroundColor DarkGray
