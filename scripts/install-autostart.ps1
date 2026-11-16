@@ -24,6 +24,27 @@ $lines = @(
 )
 [IO.File]::WriteAllText($entry, ($lines -join "`r`n") + "`r`n", (New-Object Text.UTF8Encoding($false)))
 
+# 桌面图标：用绝对路径，避免 %~dp0 指向桌面导致找不到 ps1
+$desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'MES-启动演示.cmd'
+$deskLines = @(
+    '@echo off',
+    'title MES Demo Launcher',
+    "set `"PS1=$script`"",
+    'echo [1/2] Checking backend and tunnel ...',
+    'powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -NoOpen',
+    'echo.',
+    'echo [2/2] Starting daily watcher (08:00 / 12:00 / 18:00 Beijing time) ...',
+    'start "MES-Demo-Watch" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -Watch -NoOpen',
+    'echo.',
+    'echo ============================================',
+    'echo  Daily checks: 08:00, 12:00, 18:00.',
+    'echo  Closing this window will NOT stop them.',
+    'echo ============================================',
+    'pause'
+)
+[IO.File]::WriteAllText($desktop, ($deskLines -join "`r`n") + "`r`n", (New-Object Text.UTF8Encoding($false)))
+
 Write-Host "已启用开机自启：$entry" -ForegroundColor Green
+Write-Host "已生成桌面图标：$desktop" -ForegroundColor Green
 Write-Host "登录后静默启动守护进程：立即检查一遍，然后每天 08:00 / 12:00 / 18:00 各检查一遍" -ForegroundColor Cyan
 Write-Host "取消：.\scripts\install-autostart.ps1 -Remove" -ForegroundColor DarkGray
