@@ -176,19 +176,50 @@ if ($Watch) {
         "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" | Add-Content -Path $watchLog -Encoding UTF8
     }
 
-    # 防重复：已有存活的守护进程就直接退出
+    # 防重复：锁文件记 "pid|版本"，同版本在跑就退出；旧版本在跑则接管
+    $watchVersion = "3"
     if (Test-Path $watchLock) {
         try {
-            $oldPid = Get-Content $watchLock -Raw | ForEach-Object { $_.Trim() }
+            $raw = (Get-Content $watchLock -Raw).Trim()
+            $oldPid = ($raw -split '\|')[0].Trim()
+            $oldVer = ($raw -split '\|')[-1].Trim()
             if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-                Write-WatchLog "已有守护进程 pid=$oldPid 在运行，本实例退出"
-                exit 0
+                if ($oldVer -eq $watchVersion) {
+                    Write-WatchLog "已有守护进程 pid=$oldPid 在运行，本实例退出"
+                    exit 0
+                }
+                Write-WatchLog "接管旧守护进程 pid=$oldPid（旧版本 $oldVer）"
+                Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
             }
         } catch { }
     }
-    $PID | Set-Content $watchLock -Encoding ASCII
-    Write-WatchLog "守护进程启动 pid=$PID，每日检查时点：$($checkTimes -join ' ')"
+    "$PID|$watchVersion" | Set-Content $watchLock -Encoding ASCII
+    Write-WatchLog "守护进程启动 pid=$PID，每日检查时点：$($checkTimes -join ' ')，另有每 5 分钟轻量巡检"
 
+    # 轻量巡检：只看后端与隧道是否活着，挂了立即自愈（不碰 GitHub、不触发部署）
+    function Invoke-Guard {
+        $backendOk = Test-Url "http://localhost:$Port/health/live"
+        $tunnelOk = $false
+        if (Test-Path $stateFile) {
+            try {
+                $st = Get-Content $stateFile -Raw | ConvertFrom-Json
+                if ($st.pid -and (Get-Process -Id $st.pid -ErrorAction SilentlyContinue)) {
+                    $tunnelOk = Test-Url "$($st.url)/health/ready"
+                }
+            } catch { }
+        }
+        if (-not $backendOk -or -not $tunnelOk) {
+            Write-WatchLog "巡检发现异常：backend=$backendOk tunnel=$tunnelOk，开始自愈"
+            try {
+                & $PSCommandPath -NoOpen *>&1 | ForEach-Object { Write-WatchLog "  $_" }
+            } catch {
+                Write-WatchLog "自愈异常：$_"
+            }
+        }
+    }
+
+    $lastGuard = Get-Date
     while ($true) {
         $now = Get-Date
         $next = $null
@@ -197,17 +228,26 @@ if ($Watch) {
             if ($cand -gt $now) { $next = $cand; break }
         }
         if (-not $next) { $next = [datetime]::Today.AddDays(1) + [timespan]::Parse($checkTimes[0]) }
-        Write-WatchLog "下次检查 $next（等待 $([int]($next - $now).TotalMinutes) 分钟）"
-        Start-Sleep -Seconds ([int]($next - $now).TotalSeconds + 1)
+        Write-WatchLog "下次定时检查 $next（等待 $([int]($next - $now).TotalMinutes) 分钟）"
+
+        # 一分钟一片地等，期间每 5 分钟做一次轻量巡检
+        while ((Get-Date) -lt $next) {
+            Start-Sleep -Seconds 60
+            if (((Get-Date) - $lastGuard).TotalMinutes -ge 5) {
+                $lastGuard = Get-Date
+                Invoke-Guard
+            }
+        }
 
         Write-WatchLog "=== 定时检查开始 ==="
         try {
-            # 子进程跑一遍完整自愈检查（复用活隧道；隧道断了自动重建并同步部署）
+            # 完整自愈：后端 / 隧道 / 仓库变量 / 需要时重新部署
             & $PSCommandPath -NoOpen *>&1 | ForEach-Object { Write-WatchLog "  $_" }
             Write-WatchLog "=== 定时检查结束（exit=$LASTEXITCODE） ==="
         } catch {
             Write-WatchLog "定时检查异常：$_"
         }
-        Start-Sleep -Seconds 10
+        $lastGuard = Get-Date
+        Start-Sleep -Seconds 30
     }
 }
