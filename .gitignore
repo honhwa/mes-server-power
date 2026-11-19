@@ -24,3 +24,11 @@ logs/
 backups/
 *.log
 .env
+
+# 公网演示相关，仅本地使用
+scripts/refresh-demo.ps1
+scripts/start-demo.cmd
+scripts/install-autostart.ps1
+scripts/start-tunnel.ps1
+scripts/公网演示-本地.md
+.e2e/live-check.mjs
