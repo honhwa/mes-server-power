@@ -32,3 +32,6 @@ scripts/install-autostart.ps1
 scripts/start-tunnel.ps1
 scripts/公网演示-本地.md
 .e2e/live-check.mjs
+
+# 本地导出的指南图片
+docs/上手指南-*.png
